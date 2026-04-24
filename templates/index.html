@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ServerPulse — Infrastructure Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root {
+  --bg: #080c14;
+  --bg2: #0d1420;
+  --bg3: #111927;
+  --bg4: #162030;
+  --border: #1e2d42;
+  --border2: #243650;
+  --text: #c8d8f0;
+  --text2: #7899bb;
+  --text3: #4a6480;
+  --accent: #00d4ff;
+  --accent2: #0099cc;
+  --green: #00e676;
+  --green2: #00c853;
+  --red: #ff4444;
+  --orange: #ff9800;
+  --yellow: #ffd600;
+  --purple: #b388ff;
+  --root-color: #ff6b6b;
+  --user-color: #4fc3f7;
+  --online: #00e676;
+  --offline: #ff4444;
+  --warn: #ff9800;
+  --r: 8px;
+  --r2: 12px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+  --glow: 0 0 20px rgba(0,212,255,0.15);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: 'Syne', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+code, .mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+  z-index: 10;
+}
+#sidebar-logo {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+#sidebar-logo .logo-title {
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--accent);
+}
+#sidebar-logo .logo-sub {
+  font-size: 0.68rem;
+  color: var(--text3);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 2px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+#sidebar-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.stat-mini {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  text-align: center;
+}
+.stat-mini .val { font-size: 1.3rem; font-weight: 800; color: var(--accent); font-family: 'JetBrains Mono', monospace; }
+.stat-mini .lbl { font-size: 0.6rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-top: 1px; }
+
+#sidebar-nav { padding: 12px 10px 6px; }
+.nav-label { font-size: 0.6rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1.5px; padding: 0 8px 6px; }
+
+#server-list { flex: 1; overflow-y: auto; padding: 0 10px 10px; }
+.server-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 10px;
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  position: relative;
+}
+.server-item:hover { background: var(--bg3); border-color: var(--border); }
+.server-item.active { background: var(--bg4); border-color: var(--accent2); }
+.server-item .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+.dot.online { background: var(--online); color: var(--online); }
+.dot.offline { background: var(--offline); color: var(--offline); }
+.dot.loading { background: var(--orange); color: var(--orange); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.server-item .srv-name { font-size: 0.85rem; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-item .srv-ip { font-size: 0.65rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+.server-item .srv-cpu {
+  font-size: 0.7rem; font-family: 'JetBrains Mono', monospace;
+  padding: 2px 6px; border-radius: 4px;
+  background: var(--bg);
+}
+.cpu-ok { color: var(--green); }
+.cpu-warn { color: var(--orange); }
+.cpu-crit { color: var(--red); }
+
+.sidebar-actions { padding: 12px 10px; border-top: 1px solid var(--border); }
+.btn-add-server {
+  width: 100%;
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  border: none; border-radius: var(--r); color: #000;
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.85rem;
+  padding: 10px; cursor: pointer; transition: all 0.2s;
+  letter-spacing: 0.3px;
+}
+.btn-add-server:hover { opacity: 0.9; transform: translateY(-1px); }
+
+/* ── Main Area ── */
+#main {
+  flex: 1; display: flex; flex-direction: column;
+  height: 100vh; overflow: hidden;
+}
+#topbar {
+  height: 56px; min-height: 56px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 20px;
+  gap: 16px; justify-content: space-between;
+}
+#topbar-left { display: flex; align-items: center; gap: 12px; }
+#topbar-title { font-size: 1rem; font-weight: 700; }
+#topbar-subtitle { font-size: 0.72rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+#topbar-right { display: flex; align-items: center; gap: 10px; }
+.topbar-btn {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); border-radius: var(--r); padding: 6px 14px;
+  font-family: 'Syne', sans-serif; font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
+}
+.topbar-btn:hover { border-color: var(--accent2); color: var(--accent); }
+.topbar-btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+#content {
+  flex: 1; overflow-y: auto; padding: 20px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+/* ── Overview Cards ── */
+#overview-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+}
+.ov-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r2); padding: 16px; position: relative; overflow: hidden;
+}
+.ov-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0;
+  height: 2px; background: var(--accent-color, var(--accent));
+}
+.ov-card .ov-icon { font-size: 1.6rem; margin-bottom: 8px; }
+.ov-card .ov-val {
+  font-size: 2rem; font-weight: 800;
+  font-family: 'JetBrains Mono', monospace; color: var(--accent-color, var(--accent));
+  line-height: 1;
+}
+.ov-card .ov-label { font-size: 0.7rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+.ov-card .ov-sub { font-size: 0.72rem; color: var(--text2); margin-top: 6px; font-family: 'JetBrains Mono', monospace; }
+
+/* ── Server Grid ── */
+#servers-section { }
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.section-title {
+  font-size: 0.85rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--text2);
+}
+#servers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 14px;
+}
+.server-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r2); overflow: hidden;
+  transition: all 0.2s; cursor: pointer;
+}
+.server-card:hover { border-color: var(--border2); box-shadow: var(--glow); }
+.server-card.selected { border-color: var(--accent2); box-shadow: var(--glow); }
+.server-card.offline { opacity: 0.7; }
+
+.sc-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px 10px; border-bottom: 1px solid var(--border);
+}
+.sc-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
+.sc-name { font-size: 0.95rem; font-weight: 700; flex: 1; }
+.sc-ip { font-size: 0.68rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+.sc-badge {
+  font-size: 0.6rem; font-family: 'JetBrains Mono', monospace;
+  padding: 2px 7px; border-radius: 20px; font-weight: 600;
+  background: rgba(0,230,118,0.12); color: var(--green); border: 1px solid rgba(0,230,118,0.25);
+}
+.sc-badge.offline-badge {
+  background: rgba(255,68,68,0.12); color: var(--red); border-color: rgba(255,68,68,0.25);
+}
+.sc-actions {
+  display: flex; gap: 6px; margin-left: auto;
+}
+.sc-action-btn {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+  border-radius: 5px; padding: 4px 8px; cursor: pointer; font-size: 0.72rem;
+  transition: all 0.15s; font-family: 'Syne', sans-serif;
+}
+.sc-action-btn:hover { border-color: var(--accent2); color: var(--accent); }
+
+.sc-metrics {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 0; border-bottom: 1px solid var(--border);
+}
+.sc-metric {
+  padding: 12px 14px; border-right: 1px solid var(--border); position: relative;
+}
+.sc-metric:last-child { border-right: none; }
+.sc-metric-label { font-size: 0.6rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.sc-metric-val {
+  font-size: 1.25rem; font-weight: 800;
+  font-family: 'JetBrains Mono', monospace; line-height: 1;
+}
+.sc-metric-sub { font-size: 0.62rem; color: var(--text3); margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
+
+.gauge-bar {
+  width: 100%; height: 3px; background: var(--bg);
+  border-radius: 3px; margin-top: 6px; overflow: hidden;
+}
+.gauge-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+
+.sc-pm2 { padding: 10px 14px; }
+.pm2-header { font-size: 0.62rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.pm2-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
+.pm2-item {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 0.72rem; font-family: 'JetBrains Mono', monospace;
+  padding: 4px 8px; border-radius: 5px;
+  background: var(--bg); border: 1px solid var(--border);
+  cursor: pointer; transition: all 0.15s;
+}
+.pm2-item:hover { border-color: var(--border2); }
+.pm2-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm2-status { font-size: 0.62rem; padding: 1px 6px; border-radius: 3px; }
+.pm2-online { background: rgba(0,230,118,0.15); color: var(--green); }
+.pm2-stopped { background: rgba(255,68,68,0.15); color: var(--red); }
+.pm2-errored { background: rgba(255,152,0,0.15); color: var(--orange); }
+.pm2-owner-root {
+  font-size: 0.6rem; padding: 1px 5px; border-radius: 3px;
+  background: rgba(255,107,107,0.15); color: var(--root-color);
+  border: 1px solid rgba(255,107,107,0.3); font-weight: 600;
+}
+.pm2-owner-user {
+  font-size: 0.6rem; padding: 1px 5px; border-radius: 3px;
+  background: rgba(79,195,247,0.15); color: var(--user-color);
+  border: 1px solid rgba(79,195,247,0.3); font-weight: 600;
+}
+.pm2-meta { color: var(--text3); font-size: 0.62rem; }
+.pm2-empty { font-size: 0.72rem; color: var(--text3); padding: 4px 0; text-align: center; font-family: 'JetBrains Mono', monospace; }
+
+.sc-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  font-size: 0.65rem; color: var(--text3); font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Detail Panel ── */
+#detail-panel {
+  position: fixed; top: 0; right: -600px; width: 560px;
+  height: 100vh; background: var(--bg2);
+  border-left: 1px solid var(--border);
+  z-index: 100; transition: right 0.3s cubic-bezier(0.4,0,0.2,1);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#detail-panel.open { right: 0; }
+#dp-header {
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px;
+}
+#dp-close {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); border-radius: 6px; width: 30px; height: 30px;
+  cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center;
+  margin-left: auto; transition: all 0.15s;
+}
+#dp-close:hover { border-color: var(--red); color: var(--red); }
+#dp-tabs {
+  display: flex; border-bottom: 1px solid var(--border);
+  padding: 0 20px; gap: 0;
+}
+.dp-tab {
+  padding: 10px 16px; font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; color: var(--text3); border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.dp-tab:hover { color: var(--text); }
+.dp-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+#dp-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+.dp-section { margin-bottom: 20px; }
+.dp-section-title {
+  font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--text3); margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+}
+.dp-section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+.metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.metric-key { font-size: 0.75rem; color: var(--text2); }
+.metric-value { font-size: 0.78rem; font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+.chart-wrap { background: var(--bg); border: 1px solid var(--border); border-radius: var(--r); padding: 12px; margin-bottom: 12px; }
+.chart-label { font-size: 0.65rem; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+
+.log-viewer {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  color: var(--text2); white-space: pre-wrap; max-height: 400px; overflow-y: auto;
+  line-height: 1.5;
+}
+.log-controls {
+  display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.log-select {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--r); padding: 6px 10px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; flex: 1;
+}
+.btn-sm {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); border-radius: var(--r); padding: 6px 12px;
+  cursor: pointer; font-family: 'Syne', sans-serif; font-size: 0.75rem;
+  font-weight: 600; transition: all 0.15s; white-space: nowrap;
+}
+.btn-sm:hover { border-color: var(--accent2); color: var(--accent); }
+.btn-sm.primary { background: var(--accent2); color: #000; border-color: var(--accent2); }
+.btn-sm.primary:hover { background: var(--accent); }
+
+/* ── Chatbot ── */
+#chat-panel {
+  position: fixed; bottom: 20px; right: 20px;
+  width: 420px; height: 540px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r2); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; z-index: 200;
+  transform: translateY(calc(100% + 30px));
+  opacity: 0; transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+  pointer-events: none;
+}
+#chat-panel.open { transform: translateY(0); opacity: 1; pointer-events: all; }
+#chat-header {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+#chat-header .chat-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent2), var(--purple));
+  display: flex; align-items: center; justify-content: center; font-size: 1rem;
+}
+#chat-header .chat-title { font-size: 0.9rem; font-weight: 700; }
+#chat-header .chat-sub { font-size: 0.65rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+#chat-close {
+  margin-left: auto; background: none; border: none; color: var(--text3);
+  cursor: pointer; font-size: 1.1rem; transition: color 0.15s;
+}
+#chat-close:hover { color: var(--red); }
+
+#chat-server-select {
+  padding: 8px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+#chat-server-select label { font-size: 0.68rem; color: var(--text3); white-space: nowrap; }
+#chat-srv-select {
+  flex: 1; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: 5px; padding: 4px 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+}
+
+#chat-messages {
+  flex: 1; overflow-y: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.chat-msg { display: flex; gap: 8px; }
+.chat-msg.user { flex-direction: row-reverse; }
+.chat-avatar {
+  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; font-weight: 700;
+}
+.user .chat-avatar { background: var(--accent2); color: #000; }
+.ai .chat-avatar { background: linear-gradient(135deg, var(--accent2), var(--purple)); color: #fff; }
+.chat-bubble {
+  max-width: 85%; padding: 8px 12px; border-radius: 10px;
+  font-size: 0.78rem; line-height: 1.5;
+}
+.user .chat-bubble { background: var(--accent2); color: #000; border-radius: 10px 2px 10px 10px; }
+.ai .chat-bubble {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); border-radius: 2px 10px 10px 10px;
+}
+.ai .chat-bubble code { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; background: var(--bg); padding: 1px 4px; border-radius: 3px; }
+.ai .chat-bubble pre { background: var(--bg); padding: 8px; border-radius: 5px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; margin: 4px 0; }
+.chat-thinking { display: flex; gap: 4px; align-items: center; padding: 10px 12px; }
+.chat-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); animation: thinking 1.2s infinite; }
+.chat-dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinking { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px);background:var(--accent)} }
+
+.chat-suggestions {
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.chat-suggestion {
+  font-size: 0.65rem; padding: 4px 9px; border-radius: 15px;
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text2); cursor: pointer; transition: all 0.15s;
+  font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+}
+.chat-suggestion:hover { border-color: var(--accent2); color: var(--accent); }
+
+#chat-input-area {
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: flex-end;
+}
+#chat-input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--r); padding: 8px 12px;
+  font-family: 'Syne', sans-serif; font-size: 0.8rem;
+  resize: none; min-height: 36px; max-height: 100px; line-height: 1.4;
+  transition: border-color 0.15s;
+}
+#chat-input:focus { outline: none; border-color: var(--accent2); }
+#chat-send {
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
+  border: none; border-radius: var(--r); color: #000;
+  width: 36px; height: 36px; cursor: pointer; font-size: 1rem;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+#chat-send:hover { opacity: 0.85; transform: scale(1.05); }
+
+/* ── Chat FAB ── */
+#chat-fab {
+  position: fixed; bottom: 20px; right: 20px;
+  width: 50px; height: 50px; border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent2), var(--purple));
+  border: none; cursor: pointer; z-index: 199;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem; box-shadow: 0 4px 20px rgba(0,153,204,0.4);
+  transition: all 0.2s;
+}
+#chat-fab:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,153,204,0.5); }
+#chat-fab.hidden { opacity: 0; pointer-events: none; }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 300; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px); opacity: 0; transition: opacity 0.2s;
+  pointer-events: none;
+}
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+.modal {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r2); width: 480px; max-width: 95vw;
+  box-shadow: var(--shadow);
+  transform: scale(0.95); transition: transform 0.2s;
+}
+.modal-overlay.open .modal { transform: scale(1); }
+.modal-header {
+  padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-size: 1rem; font-weight: 700; }
+.modal-close { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 1.2rem; }
+.modal-body { padding: 20px; }
+.modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
+
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 0.72rem; color: var(--text2); margin-bottom: 5px; display: block; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.form-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--r); padding: 9px 12px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.8rem;
+  transition: border-color 0.15s;
+}
+.form-input:focus { outline: none; border-color: var(--accent2); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-hint { font-size: 0.65rem; color: var(--text3); margin-top: 3px; }
+.form-divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+.connection-status {
+  padding: 8px 12px; border-radius: var(--r); font-size: 0.75rem;
+  font-family: 'JetBrains Mono', monospace; margin-top: 10px;
+}
+.cs-ok { background: rgba(0,230,118,0.1); color: var(--green); border: 1px solid rgba(0,230,118,0.25); }
+.cs-fail { background: rgba(255,68,68,0.1); color: var(--red); border: 1px solid rgba(255,68,68,0.25); }
+.cs-testing { background: rgba(0,212,255,0.1); color: var(--accent); border: 1px solid rgba(0,212,255,0.25); }
+
+/* ── Empty state ── */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 60px 20px; text-align: center;
+}
+.empty-icon { font-size: 3rem; margin-bottom: 16px; opacity: 0.5; }
+.empty-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; color: var(--text2); }
+.empty-sub { font-size: 0.8rem; color: var(--text3); margin-bottom: 20px; }
+
+/* ── Toast ── */
+#toast-container { position: fixed; top: 20px; right: 20px; z-index: 400; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 10px 16px;
+  font-size: 0.8rem; box-shadow: var(--shadow);
+  animation: slideIn 0.3s ease;
+  display: flex; align-items: center; gap: 8px;
+}
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error { border-left: 3px solid var(--red); }
+.toast.info { border-left: 3px solid var(--accent); }
+@keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  #overview-grid { grid-template-columns: repeat(2, 1fr); }
+  #servers-grid { grid-template-columns: 1fr; }
+  #sidebar { width: 220px; min-width: 220px; }
+  #chat-panel { width: calc(100vw - 30px); right: 15px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav id="sidebar">
+  <div id="sidebar-logo">
+    <div class="logo-title">⚡ ServerPulse</div>
+    <div class="logo-sub">Infrastructure Monitor</div>
+  </div>
+  <div id="sidebar-stats">
+    <div class="stat-mini">
+      <div class="val" id="stat-total">0</div>
+      <div class="lbl">Servers</div>
+    </div>
+    <div class="stat-mini">
+      <div class="val" id="stat-online" style="color:var(--green)">0</div>
+      <div class="lbl">Online</div>
+    </div>
+    <div class="stat-mini">
+      <div class="val" id="stat-pm2">0</div>
+      <div class="lbl">PM2 Svcs</div>
+    </div>
+    <div class="stat-mini">
+      <div class="val" id="stat-alerts" style="color:var(--orange)">0</div>
+      <div class="lbl">Alerts</div>
+    </div>
+  </div>
+  <div id="sidebar-nav">
+    <div class="nav-label">Servers</div>
+  </div>
+  <div id="server-list"></div>
+  <div class="sidebar-actions">
+    <button class="btn-add-server" onclick="openAddServerModal()">+ Add Server</button>
+  </div>
+</nav>
+
+<!-- Main -->
+<main id="main">
+  <div id="topbar">
+    <div id="topbar-left">
+      <div>
+        <div id="topbar-title">All Servers</div>
+        <div id="topbar-subtitle" class="mono">Live monitoring · 30s refresh</div>
+      </div>
+    </div>
+    <div id="topbar-right">
+      <button class="topbar-btn" onclick="refreshAll()">↺ Refresh All</button>
+      <div id="conn-indicator" style="font-size:0.7rem;font-family:monospace;color:var(--text3)">● ws</div>
+    </div>
+  </div>
+  <div id="content">
+    <!-- Overview -->
+    <div id="overview-grid">
+      <div class="ov-card" style="--accent-color:var(--accent)">
+        <div class="ov-icon">🖥️</div>
+        <div class="ov-val" id="ov-servers">0</div>
+        <div class="ov-label">Total Servers</div>
+        <div class="ov-sub" id="ov-online-sub">— online</div>
+      </div>
+      <div class="ov-card" style="--accent-color:var(--green)">
+        <div class="ov-icon">⚙️</div>
+        <div class="ov-val" id="ov-pm2">0</div>
+        <div class="ov-label">PM2 Services</div>
+        <div class="ov-sub" id="ov-pm2-sub">— running</div>
+      </div>
+      <div class="ov-card" style="--accent-color:var(--yellow)">
+        <div class="ov-icon">📊</div>
+        <div class="ov-val" id="ov-avg-cpu">—</div>
+        <div class="ov-label">Avg CPU</div>
+        <div class="ov-sub" id="ov-cpu-sub">across all servers</div>
+      </div>
+      <div class="ov-card" style="--accent-color:var(--purple)">
+        <div class="ov-icon">🧠</div>
+        <div class="ov-val" id="ov-avg-ram">—</div>
+        <div class="ov-label">Avg RAM</div>
+        <div class="ov-sub" id="ov-ram-sub">across all servers</div>
+      </div>
+    </div>
+
+    <!-- Servers -->
+    <div id="servers-section">
+      <div class="section-header">
+        <div class="section-title">Server Fleet</div>
+        <div style="font-size:0.7rem;color:var(--text3);font-family:monospace" id="last-updated-lbl">Never updated</div>
+      </div>
+      <div id="servers-grid">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">🔌</div>
+          <div class="empty-title">No servers added yet</div>
+          <div class="empty-sub">Add your first Ubuntu server to start monitoring</div>
+          <button class="btn-sm primary" onclick="openAddServerModal()">+ Add Server</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Detail Panel -->
+<div id="detail-panel">
+  <div id="dp-header">
+    <div>
+      <div id="dp-name" style="font-size:1rem;font-weight:800"></div>
+      <div id="dp-ip" style="font-size:0.7rem;color:var(--text3);font-family:monospace"></div>
+    </div>
+    <button id="dp-close" onclick="closeDetailPanel()">✕</button>
+  </div>
+  <div id="dp-tabs">
+    <div class="dp-tab active" data-tab="overview" onclick="switchDPTab('overview')">Overview</div>
+    <div class="dp-tab" data-tab="pm2" onclick="switchDPTab('pm2')">PM2</div>
+    <div class="dp-tab" data-tab="logs" onclick="switchDPTab('logs')">Logs</div>
+    <div class="dp-tab" data-tab="history" onclick="switchDPTab('history')">History</div>
+  </div>
+  <div id="dp-body"></div>
+</div>
+
+<!-- Chat Panel -->
+<button id="chat-fab" onclick="openChat()" title="AI Assistant">🤖</button>
+
+<div id="chat-panel">
+  <div id="chat-header">
+    <div class="chat-icon">🤖</div>
+    <div>
+      <div class="chat-title">PulseAI Assistant</div>
+      <div class="chat-sub">Investigation only · read-only access</div>
+    </div>
+    <button id="chat-close" onclick="closeChat()">✕</button>
+  </div>
+  <div id="chat-server-select">
+    <label>Target:</label>
+    <select id="chat-srv-select">
+      <option value="">All Servers</option>
+    </select>
+  </div>
+  <div id="chat-messages">
+    <div class="chat-msg ai">
+      <div class="chat-avatar">AI</div>
+      <div class="chat-bubble">
+        Hello! I'm PulseAI — your server investigation assistant.<br><br>
+        I can help you analyze <strong>PM2 logs</strong>, <strong>CPU/RAM usage</strong>, <strong>disk metrics</strong>, historical trends, and service health.<br><br>
+        <em>Note: I can only investigate and report. I cannot modify anything.</em>
+      </div>
+    </div>
+  </div>
+  <div class="chat-suggestions">
+    <span class="chat-suggestion" onclick="sendSuggestion(this)">PM2 service status</span>
+    <span class="chat-suggestion" onclick="sendSuggestion(this)">Last 30 min CPU</span>
+    <span class="chat-suggestion" onclick="sendSuggestion(this)">High memory services</span>
+    <span class="chat-suggestion" onclick="sendSuggestion(this)">Any server alerts?</span>
+  </div>
+  <div id="chat-input-area">
+    <textarea id="chat-input" placeholder="Ask about your servers..." rows="1"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"
+      oninput="autoResize(this)"></textarea>
+    <button id="chat-send" onclick="sendChat()">➤</button>
+  </div>
+</div>
+
+<!-- Add Server Modal -->
+<div class="modal-overlay" id="add-server-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add Server</div>
+      <button class="modal-close" onclick="closeAddServerModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Server Name *</label>
+          <input type="text" id="f-name" class="form-input" placeholder="prod-web-01">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tags</label>
+          <input type="text" id="f-tags" class="form-input" placeholder="web, prod">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">IP Address *</label>
+          <input type="text" id="f-ip" class="form-input" placeholder="192.168.1.100">
+        </div>
+        <div class="form-group">
+          <label class="form-label">SSH Port</label>
+          <input type="number" id="f-port" class="form-input" value="22">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Username *</label>
+        <input type="text" id="f-user" class="form-input" placeholder="ubuntu">
+      </div>
+      <hr class="form-divider">
+      <div class="form-group">
+        <label class="form-label">SSH Private Key Path</label>
+        <input type="text" id="f-key" class="form-input" placeholder="~/.ssh/id_rsa  (leave empty if using password)">
+        <div class="form-hint">Absolute or ~ path to private key file on this machine</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password (fallback)</label>
+        <input type="password" id="f-pass" class="form-input" placeholder="Only if no SSH key">
+      </div>
+      <div id="conn-test-status"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm" onclick="testConnection()">🔌 Test Connection</button>
+      <button class="btn-sm primary" onclick="addServer()">Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────
+const state = {
+  servers: {},   // id -> full metric data
+  selectedDP: null,  // detail panel server id
+  dpTab: 'overview',
+  charts: {},
+};
+
+// ─── Socket.IO ───────────────────────────────────────────────────────────
+const socket = io();
+socket.on('connect', () => {
+  document.getElementById('conn-indicator').style.color = 'var(--green)';
+  document.getElementById('conn-indicator').textContent = '● live';
+});
+socket.on('disconnect', () => {
+  document.getElementById('conn-indicator').style.color = 'var(--red)';
+  document.getElementById('conn-indicator').textContent = '● offline';
+});
+socket.on('server_update', data => {
+  state.servers[data.id] = data;
+  renderServerCard(data);
+  updateSidebar();
+  updateOverview();
+  updateChatServerSelect();
+  if (state.selectedDP === data.id) renderDetailPanel(data);
+  document.getElementById('last-updated-lbl').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  document.getElementById('empty-state')?.remove();
+});
+
+// ─── Init ─────────────────────────────────────────────────────────────────
+async function init() {
+  const res = await fetch('/api/metrics');
+  const metrics = await res.json();
+  if (metrics.length) {
+    document.getElementById('empty-state')?.remove();
+    metrics.forEach(m => {
+      state.servers[m.id] = m;
+      renderServerCard(m);
+    });
+    updateSidebar();
+    updateOverview();
+    updateChatServerSelect();
+  }
+}
+init();
+
+// ─── Render server card ────────────────────────────────────────────────
+function renderServerCard(data) {
+  const grid = document.getElementById('servers-grid');
+  let card = document.getElementById(`card-${data.id}`);
+  const isOnline = data.status === 'online';
+  const m = data.metrics || {};
+
+  const cpu = m.cpu ?? 0;
+  const ram = m.ram_pct ?? 0;
+  const disk = m.disk_pct ?? 0;
+
+  const cpuColor = cpu > 80 ? 'var(--red)' : cpu > 60 ? 'var(--orange)' : 'var(--green)';
+  const ramColor = ram > 85 ? 'var(--red)' : ram > 70 ? 'var(--orange)' : 'var(--accent)';
+  const diskColor = disk > 90 ? 'var(--red)' : disk > 75 ? 'var(--orange)' : 'var(--purple)';
+
+  const pm2List = (data.pm2 || []).slice(0, 6);
+  const pm2HTML = pm2List.length ? pm2List.map(p => {
+    const ownerBadge = p.is_root
+      ? `<span class="pm2-owner-root">ROOT</span>`
+      : `<span class="pm2-owner-user">${p.user || 'user'}</span>`;
+    const statusCls = p.status === 'online' ? 'pm2-online' : p.status === 'stopped' ? 'pm2-stopped' : 'pm2-errored';
+    return `<div class="pm2-item" onclick="openLogsForService('${data.id}','${p.name}','${p.is_root ? 'root' : p.user}'); event.stopPropagation()">
+      ${ownerBadge}
+      <span class="pm2-name">${p.name}</span>
+      <span class="pm2-status ${statusCls}">${p.status}</span>
+      <span class="pm2-meta">${fmtMem(p.memory)}</span>
+    </div>`;
+  }).join('') : `<div class="pm2-empty">No PM2 processes found</div>`;
+
+  const pm2Total = data.pm2?.length || 0;
+  const pm2Running = data.pm2?.filter(p => p.status === 'online').length || 0;
+
+  const html = `
+    <div class="sc-header">
+      <div class="sc-dot ${isOnline ? 'online' : 'offline'}" style="background:${isOnline ? 'var(--online)' : 'var(--offline)'};color:${isOnline ? 'var(--online)' : 'var(--offline)'}"></div>
+      <div>
+        <div class="sc-name">${data.name}</div>
+        <div class="sc-ip">${data.ip}</div>
+      </div>
+      <span class="sc-badge ${isOnline ? '' : 'offline-badge'}">${isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+      <div class="sc-actions">
+        <button class="sc-action-btn" onclick="openDetailPanel('${data.id}');event.stopPropagation()" title="Details">⊞</button>
+        <button class="sc-action-btn" onclick="refreshServer('${data.id}');event.stopPropagation()" title="Refresh">↺</button>
+        <button class="sc-action-btn danger" onclick="deleteServer('${data.id}');event.stopPropagation()" title="Remove" style="transition:color 0.15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color=''">✕</button>
+      </div>
+    </div>
+    ${isOnline ? `
+    <div class="sc-metrics">
+      <div class="sc-metric">
+        <div class="sc-metric-label">CPU</div>
+        <div class="sc-metric-val" style="color:${cpuColor}">${cpu}%</div>
+        <div class="sc-metric-sub">load: ${(m.load||['?'])[0]}</div>
+        <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.min(cpu,100)}%;background:${cpuColor}"></div></div>
+      </div>
+      <div class="sc-metric">
+        <div class="sc-metric-label">RAM</div>
+        <div class="sc-metric-val" style="color:${ramColor}">${ram}%</div>
+        <div class="sc-metric-sub">${fmtMem(m.ram_used)} / ${fmtMem(m.ram_total)}</div>
+        <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.min(ram,100)}%;background:${ramColor}"></div></div>
+      </div>
+      <div class="sc-metric">
+        <div class="sc-metric-label">DISK</div>
+        <div class="sc-metric-val" style="color:${diskColor}">${disk}%</div>
+        <div class="sc-metric-sub">${m.disk_used||'?'} / ${m.disk_total||'?'}</div>
+        <div class="gauge-bar"><div class="gauge-fill" style="width:${Math.min(disk,100)}%;background:${diskColor}"></div></div>
+      </div>
+    </div>
+    <div class="sc-pm2">
+      <div class="pm2-header">PM2 Services · ${pm2Running}/${pm2Total} running</div>
+      <div class="pm2-list">${pm2HTML}</div>
+    </div>
+    <div class="sc-footer">
+      <span>↑ ${fmtMem(m.net_tx||0)}/s ↓ ${fmtMem(m.net_rx||0)}/s</span>
+      <span>${m.uptime||'—'}</span>
+      <span>${m.proc_count||0} procs</span>
+    </div>
+    ` : `
+    <div style="padding:20px;text-align:center;color:var(--red);font-family:monospace;font-size:0.8rem">
+      ⚠ ${data.error || 'Connection failed'}
+    </div>`}
+  `;
+
+  if (!card) {
+    card = document.createElement('div');
+    card.id = `card-${data.id}`;
+    card.className = `server-card ${isOnline ? '' : 'offline'}`;
+    card.onclick = () => openDetailPanel(data.id);
+    grid.appendChild(card);
+  }
+  card.className = `server-card ${isOnline ? '' : 'offline'} ${state.selectedDP === data.id ? 'selected' : ''}`;
+  card.innerHTML = html;
+}
+
+function updateSidebar() {
+  const list = document.getElementById('server-list');
+  const servers = Object.values(state.servers);
+  list.innerHTML = '';
+  servers.forEach(s => {
+    const isOnline = s.status === 'online';
+    const cpu = s.metrics?.cpu ?? 0;
+    const cpuCls = cpu > 80 ? 'cpu-crit' : cpu > 60 ? 'cpu-warn' : 'cpu-ok';
+    const el = document.createElement('div');
+    el.className = `server-item ${state.selectedDP === s.id ? 'active' : ''}`;
+    el.onclick = () => openDetailPanel(s.id);
+    el.innerHTML = `
+      <div class="dot ${isOnline ? 'online' : 'offline'}"></div>
+      <div style="flex:1;overflow:hidden">
+        <div class="srv-name">${s.name}</div>
+        <div class="srv-ip">${s.ip}</div>
+      </div>
+      ${isOnline ? `<span class="srv-cpu ${cpuCls}">${cpu}%</span>` : ''}
+    `;
+    list.appendChild(el);
+  });
+
+  const online = servers.filter(s => s.status === 'online').length;
+  const pm2Total = servers.reduce((a, s) => a + (s.pm2?.length || 0), 0);
+  const alerts = servers.filter(s => (s.metrics?.cpu ?? 0) > 80 || (s.metrics?.ram_pct ?? 0) > 85 || (s.metrics?.disk_pct ?? 0) > 90).length;
+
+  document.getElementById('stat-total').textContent = servers.length;
+  document.getElementById('stat-online').textContent = online;
+  document.getElementById('stat-pm2').textContent = pm2Total;
+  document.getElementById('stat-alerts').textContent = alerts;
+}
+
+function updateOverview() {
+  const servers = Object.values(state.servers);
+  const online = servers.filter(s => s.status === 'online');
+  const pm2Total = servers.reduce((a, s) => a + (s.pm2?.length || 0), 0);
+  const pm2Running = servers.reduce((a, s) => a + (s.pm2?.filter(p => p.status === 'online').length || 0), 0);
+  const avgCPU = online.length ? (online.reduce((a, s) => a + (s.metrics?.cpu || 0), 0) / online.length).toFixed(1) : '—';
+  const avgRAM = online.length ? (online.reduce((a, s) => a + (s.metrics?.ram_pct || 0), 0) / online.length).toFixed(1) : '—';
+
+  document.getElementById('ov-servers').textContent = servers.length;
+  document.getElementById('ov-online-sub').textContent = `${online.length} online`;
+  document.getElementById('ov-pm2').textContent = pm2Total;
+  document.getElementById('ov-pm2-sub').textContent = `${pm2Running} running`;
+  document.getElementById('ov-avg-cpu').textContent = avgCPU === '—' ? '—' : avgCPU + '%';
+  document.getElementById('ov-avg-ram').textContent = avgRAM === '—' ? '—' : avgRAM + '%';
+}
+
+function updateChatServerSelect() {
+  const sel = document.getElementById('chat-srv-select');
+  const servers = Object.values(state.servers);
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All Servers</option>';
+  servers.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id; opt.textContent = `${s.name} (${s.ip})`;
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+}
+
+// ─── Detail Panel ─────────────────────────────────────────────────────────
+function openDetailPanel(sid) {
+  state.selectedDP = sid;
+  const data = state.servers[sid];
+  if (!data) return;
+  document.getElementById('dp-name').textContent = data.name;
+  document.getElementById('dp-ip').textContent = data.ip + ':' + (data.port || 22);
+  document.getElementById('detail-panel').classList.add('open');
+  document.querySelectorAll('.server-card').forEach(c => c.classList.remove('selected'));
+  document.getElementById(`card-${sid}`)?.classList.add('selected');
+  renderDetailPanel(data);
+  updateSidebar();
+}
+
+function closeDetailPanel() {
+  document.getElementById('detail-panel').classList.remove('open');
+  state.selectedDP = null;
+  document.querySelectorAll('.server-card').forEach(c => c.classList.remove('selected'));
+  updateSidebar();
+}
+
+function switchDPTab(tab) {
+  state.dpTab = tab;
+  document.querySelectorAll('.dp-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const data = state.servers[state.selectedDP];
+  if (data) renderDetailPanel(data);
+}
+
+async function renderDetailPanel(data) {
+  const body = document.getElementById('dp-body');
+  const tab = state.dpTab;
+  const m = data.metrics || {};
+  const isOnline = data.status === 'online';
+
+  if (tab === 'overview') {
+    body.innerHTML = `
+      <div class="dp-section">
+        <div class="dp-section-title">System Info</div>
+        <div class="metric-row"><span class="metric-key">Status</span><span class="metric-value" style="color:${isOnline ? 'var(--green)' : 'var(--red)'}">${data.status.toUpperCase()}</span></div>
+        <div class="metric-row"><span class="metric-key">Uptime</span><span class="metric-value">${m.uptime || '—'}</span></div>
+        <div class="metric-row"><span class="metric-key">Load (1/5/15m)</span><span class="metric-value">${(m.load||['?','?','?']).join(' / ')}</span></div>
+        <div class="metric-row"><span class="metric-key">Processes</span><span class="metric-value">${m.proc_count || '—'}</span></div>
+        <div class="metric-row"><span class="metric-key">Last Updated</span><span class="metric-value">${new Date(data.last_updated).toLocaleTimeString()}</span></div>
+      </div>
+      ${isOnline ? `
+      <div class="dp-section">
+        <div class="dp-section-title">CPU</div>
+        <div class="metric-row"><span class="metric-key">Usage</span><span class="metric-value" style="color:${m.cpu>80?'var(--red)':m.cpu>60?'var(--orange)':'var(--green)'}">${m.cpu}%</span></div>
+        <div class="gauge-bar" style="height:6px;margin-bottom:10px"><div class="gauge-fill" style="width:${m.cpu}%;background:${m.cpu>80?'var(--red)':m.cpu>60?'var(--orange)':'var(--green)'}"></div></div>
+      </div>
+      <div class="dp-section">
+        <div class="dp-section-title">Memory</div>
+        <div class="metric-row"><span class="metric-key">Usage</span><span class="metric-value">${m.ram_pct}%</span></div>
+        <div class="metric-row"><span class="metric-key">Used</span><span class="metric-value">${fmtMem(m.ram_used)}</span></div>
+        <div class="metric-row"><span class="metric-key">Total</span><span class="metric-value">${fmtMem(m.ram_total)}</span></div>
+        <div class="gauge-bar" style="height:6px;margin-bottom:10px"><div class="gauge-fill" style="width:${m.ram_pct}%;background:var(--purple)"></div></div>
+      </div>
+      <div class="dp-section">
+        <div class="dp-section-title">Disk</div>
+        <div class="metric-row"><span class="metric-key">Usage</span><span class="metric-value">${m.disk_pct}%</span></div>
+        <div class="metric-row"><span class="metric-key">Used</span><span class="metric-value">${m.disk_used}</span></div>
+        <div class="metric-row"><span class="metric-key">Total</span><span class="metric-value">${m.disk_total}</span></div>
+        <div class="gauge-bar" style="height:6px;margin-bottom:10px"><div class="gauge-fill" style="width:${m.disk_pct}%;background:var(--accent)"></div></div>
+      </div>
+      <div class="dp-section">
+        <div class="dp-section-title">Network</div>
+        <div class="metric-row"><span class="metric-key">RX Total</span><span class="metric-value">${fmtMem(m.net_rx)}</span></div>
+        <div class="metric-row"><span class="metric-key">TX Total</span><span class="metric-value">${fmtMem(m.net_tx)}</span></div>
+      </div>
+      ` : `<div style="color:var(--red);font-family:monospace;font-size:0.8rem;padding:10px">${data.error || 'Server offline'}</div>`}
+    `;
+  } else if (tab === 'pm2') {
+    const pm2 = data.pm2 || [];
+    const rootServices = pm2.filter(p => p.is_root);
+    const userServices = pm2.filter(p => !p.is_root);
+
+    const renderPM2Table = (list, label, colorClass) => {
+      if (!list.length) return '';
+      return `
+        <div class="dp-section">
+          <div class="dp-section-title">${label} (${list.length})</div>
+          ${list.map(p => {
+            const statusCls = p.status === 'online' ? 'pm2-online' : p.status === 'stopped' ? 'pm2-stopped' : 'pm2-errored';
+            return `
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span class="${colorClass}" style="font-size:0.65rem;padding:2px 7px;border-radius:3px;font-family:monospace">${p.user}</span>
+                <span style="font-weight:700;font-size:0.85rem">${p.name}</span>
+                <span class="pm2-status ${statusCls}">${p.status}</span>
+                <span style="margin-left:auto;font-size:0.65rem;color:var(--text3);font-family:monospace">#${p.pm_id}</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-family:monospace;font-size:0.7rem">
+                <div><span style="color:var(--text3)">CPU</span> ${p.cpu}%</div>
+                <div><span style="color:var(--text3)">MEM</span> ${fmtMem(p.memory)}</div>
+                <div><span style="color:var(--text3)">↺</span> ${p.restarts} restarts</div>
+              </div>
+              <div style="margin-top:6px;font-family:monospace;font-size:0.65rem;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.script || '—'}</div>
+              <button class="btn-sm" style="margin-top:8px;font-size:0.68rem" onclick="openLogsForService('${data.id}','${p.name}','${p.user}')">📋 View Logs</button>
+            </div>`;
+          }).join('')}
+        </div>
+      `;
+    };
+
+    body.innerHTML = `
+      ${!pm2.length ? '<div class="empty-state" style="padding:30px"><div class="empty-icon">⚙️</div><div class="empty-title">No PM2 processes</div></div>' : ''}
+      ${renderPM2Table(rootServices, '🔴 Root Services', 'pm2-owner-root')}
+      ${renderPM2Table(userServices, '🔵 User Services', 'pm2-owner-user')}
+    `;
+  } else if (tab === 'logs') {
+    const pm2 = data.pm2 || [];
+    const serviceOptions = pm2.map(p => `<option value="${p.name}|${p.is_root ? 'root' : p.user}">${p.name} (${p.is_root ? 'ROOT' : p.user})</option>`).join('');
+    body.innerHTML = `
+      <div class="log-controls">
+        <select id="log-service-sel" class="log-select">
+          <option value="">Select a service...</option>
+          ${serviceOptions}
+        </select>
+        <select id="log-lines-sel" class="log-select" style="max-width:90px">
+          <option value="50">50 lines</option>
+          <option value="100" selected>100 lines</option>
+          <option value="200">200 lines</option>
+          <option value="500">500 lines</option>
+        </select>
+        <button class="btn-sm primary" onclick="fetchLogs('${data.id}')">Load Logs</button>
+      </div>
+      <div id="log-output" class="log-viewer" style="min-height:200px">
+        <span style="color:var(--text3)">Select a service and click Load Logs</span>
+      </div>
+    `;
+    if (body.dataset.preselect) {
+      const [name, user] = body.dataset.preselect.split('|');
+      document.getElementById('log-service-sel').value = body.dataset.preselect;
+      delete body.dataset.preselect;
+      fetchLogs(data.id);
+    }
+  } else if (tab === 'history') {
+    body.innerHTML = `
+      <div class="dp-section">
+        <div class="dp-section-title">CPU History</div>
+        <div class="chart-wrap"><canvas id="dp-cpu-chart" height="120"></canvas></div>
+      </div>
+      <div class="dp-section">
+        <div class="dp-section-title">RAM History</div>
+        <div class="chart-wrap"><canvas id="dp-ram-chart" height="120"></canvas></div>
+      </div>
+    `;
+    const histRes = await fetch(`/api/history/${data.id}`);
+    const hist = await histRes.json();
+    if (hist.length) {
+      const labels = hist.map(h => new Date(h.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+      const cpuData = hist.map(h => h.cpu);
+      const ramData = hist.map(h => h.ram);
+      createHistChart('dp-cpu-chart', labels, cpuData, 'CPU %', 'rgba(0,212,255,0.8)', 'rgba(0,212,255,0.1)');
+      createHistChart('dp-ram-chart', labels, ramData, 'RAM %', 'rgba(179,136,255,0.8)', 'rgba(179,136,255,0.1)');
+    } else {
+      body.innerHTML += '<div style="text-align:center;color:var(--text3);font-size:0.8rem;padding:20px">No history yet — data accumulates every 30s</div>';
+    }
+  }
+}
+
+function createHistChart(canvasId, labels, data, label, borderColor, bgColor) {
+  const ctx = document.getElementById(canvasId)?.getContext('2d');
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{ label, data, borderColor, backgroundColor: bgColor, borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3 }]
+    },
+    options: {
+      responsive: true, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#4a6480', font: { size: 9, family: 'JetBrains Mono' }, maxTicksLimit: 8 }, grid: { color: '#1e2d42' } },
+        y: { min: 0, max: 100, ticks: { color: '#4a6480', font: { size: 9 }, callback: v => v + '%' }, grid: { color: '#1e2d42' } }
+      }
+    }
+  });
+}
+
+function openLogsForService(sid, name, user) {
+  openDetailPanel(sid);
+  state.dpTab = 'logs';
+  document.querySelectorAll('.dp-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'logs'));
+  const body = document.getElementById('dp-body');
+  body.dataset.preselect = `${name}|${user}`;
+  const data = state.servers[sid];
+  if (data) renderDetailPanel(data);
+}
+
+async function fetchLogs(sid) {
+  const sel = document.getElementById('log-service-sel');
+  const lines = document.getElementById('log-lines-sel')?.value || 100;
+  if (!sel?.value) return;
+  const [service, user] = sel.value.split('|');
+  const output = document.getElementById('log-output');
+  output.textContent = 'Loading logs...';
+  try {
+    const res = await fetch('/api/pm2/logs', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ server_id: sid, service, run_as: user, lines })
+    });
+    const data = await res.json();
+    if (data.error) output.textContent = 'Error: ' + data.error;
+    else output.textContent = data.logs || '(no output)';
+    output.scrollTop = output.scrollHeight;
+  } catch(e) {
+    output.textContent = 'Failed: ' + e.message;
+  }
+}
+
+// ─── Server Management ────────────────────────────────────────────────────
+function openAddServerModal() { document.getElementById('add-server-modal').classList.add('open'); }
+function closeAddServerModal() {
+  document.getElementById('add-server-modal').classList.remove('open');
+  document.getElementById('conn-test-status').innerHTML = '';
+  ['f-name','f-ip','f-user','f-key','f-pass'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('f-port').value = '22';
+  document.getElementById('f-tags').value = '';
+}
+
+async function testConnection() {
+  const status = document.getElementById('conn-test-status');
+  status.innerHTML = '<div class="connection-status cs-testing">Testing connection...</div>';
+  try {
+    const res = await fetch('/api/test_connection', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        ip: document.getElementById('f-ip').value,
+        port: document.getElementById('f-port').value || 22,
+        username: document.getElementById('f-user').value,
+        key_path: document.getElementById('f-key').value,
+        password: document.getElementById('f-pass').value,
+      })
+    });
+    const data = await res.json();
+    if (data.ok) status.innerHTML = `<div class="connection-status cs-ok">✓ ${data.message}</div>`;
+    else status.innerHTML = `<div class="connection-status cs-fail">✗ ${data.message}</div>`;
+  } catch(e) {
+    status.innerHTML = `<div class="connection-status cs-fail">✗ Request failed</div>`;
+  }
+}
+
+async function addServer() {
+  const name = document.getElementById('f-name').value.trim();
+  const ip = document.getElementById('f-ip').value.trim();
+  const username = document.getElementById('f-user').value.trim();
+  if (!name || !ip || !username) { toast('Fill in required fields', 'error'); return; }
+  const tags = document.getElementById('f-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  try {
+    const res = await fetch('/api/servers', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        name, ip, username, tags,
+        port: document.getElementById('f-port').value || 22,
+        key_path: document.getElementById('f-key').value,
+        password: document.getElementById('f-pass').value,
+      })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`Server "${name}" added — collecting metrics...`, 'success');
+      closeAddServerModal();
+    } else toast(data.error || 'Failed', 'error');
+  } catch(e) { toast('Request failed', 'error'); }
+}
+
+async function deleteServer(sid) {
+  if (!confirm('Remove this server from monitoring?')) return;
+  await fetch(`/api/servers/${sid}`, { method: 'DELETE' });
+  delete state.servers[sid];
+  document.getElementById(`card-${sid}`)?.remove();
+  if (state.selectedDP === sid) closeDetailPanel();
+  updateSidebar();
+  updateOverview();
+  updateChatServerSelect();
+  toast('Server removed', 'info');
+  if (!Object.keys(state.servers).length) {
+    document.getElementById('servers-grid').innerHTML = `
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">🔌</div>
+        <div class="empty-title">No servers added yet</div>
+        <div class="empty-sub">Add your first Ubuntu server to start monitoring</div>
+        <button class="btn-sm primary" onclick="openAddServerModal()">+ Add Server</button>
+      </div>`;
+  }
+}
+
+async function refreshServer(sid) {
+  toast('Refreshing...', 'info');
+  await fetch(`/api/refresh/${sid}`, { method: 'POST' });
+}
+
+function refreshAll() {
+  Object.keys(state.servers).forEach(sid => refreshServer(sid));
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────
+let chatOpen = false;
+function openChat() {
+  chatOpen = true;
+  document.getElementById('chat-panel').classList.add('open');
+  document.getElementById('chat-fab').classList.add('hidden');
+}
+function closeChat() {
+  chatOpen = false;
+  document.getElementById('chat-panel').classList.remove('open');
+  document.getElementById('chat-fab').classList.remove('hidden');
+}
+function sendSuggestion(el) {
+  document.getElementById('chat-input').value = el.textContent;
+  sendChat();
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+  autoResize(input);
+
+  const messages = document.getElementById('chat-messages');
+  // User bubble
+  messages.innerHTML += `<div class="chat-msg user"><div class="chat-avatar">U</div><div class="chat-bubble">${escHTML(q)}</div></div>`;
+
+  // Thinking
+  const thinkId = 'think-' + Date.now();
+  messages.innerHTML += `<div class="chat-msg ai" id="${thinkId}"><div class="chat-avatar">AI</div><div class="chat-bubble"><div class="chat-thinking"><div class="chat-dot"></div><div class="chat-dot"></div><div class="chat-dot"></div></div></div></div>`;
+  messages.scrollTop = messages.scrollHeight;
+
+  const serverId = document.getElementById('chat-srv-select').value || null;
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ question: q, server_id: serverId })
+    });
+    const data = await res.json();
+    document.getElementById(thinkId)?.remove();
+    const answer = data.answer || data.error || 'No response';
+    messages.innerHTML += `<div class="chat-msg ai"><div class="chat-avatar">AI</div><div class="chat-bubble">${marked.parse(answer)}</div></div>`;
+  } catch(e) {
+    document.getElementById(thinkId)?.remove();
+    messages.innerHTML += `<div class="chat-msg ai"><div class="chat-avatar">AI</div><div class="chat-bubble" style="color:var(--red)">Error: ${e.message}</div></div>`;
+  }
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────
+function fmtMem(bytes) {
+  if (!bytes) return '0B';
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0; bytes = Number(bytes);
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+  return bytes.toFixed(1) + units[i];
+}
+function escHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
+function toast(msg, type='info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  const icons = { success:'✓', error:'✗', info:'ℹ' };
+  t.innerHTML = `<span>${icons[type]||'ℹ'}</span><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+</script>
+</body>
+</html>
