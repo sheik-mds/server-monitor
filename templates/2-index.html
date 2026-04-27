@@ -766,11 +766,6 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
         <label class="form-label">Password (fallback)</label>
         <input type="password" id="f-pass" class="form-input" placeholder="Only if no SSH key">
       </div>
-      <div class="form-group">
-        <label class="form-label">Sudo Password <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(for root PM2 access)</span></label>
-        <input type="password" id="f-sudo" class="form-input" placeholder="Required if sudo asks for password">
-        <div class="form-hint">Used only for <code>sudo pm2</code> commands. Stored encrypted locally. Never sent to browser after save.</div>
-      </div>
       <div id="conn-test-status"></div>
     </div>
     <div class="modal-footer">
@@ -1095,27 +1090,37 @@ async function renderDetailPanel(data) {
     `;
   } else if (tab === 'logs') {
     const pm2 = data.pm2 || [];
-    const serviceOptions = pm2.map(p => `<option value="${p.name}|${p.is_root ? 'root' : p.user}">${p.name} (${p.is_root ? 'ROOT' : p.user})</option>`).join('');
+    const serviceOptions = pm2.length
+      ? pm2.map(p => `<option value="${p.name}|${p.is_root ? 'root' : p.user}">${p.name} (${p.is_root ? 'ROOT' : p.user}) — ${p.status}</option>`).join('')
+      : '';
     body.innerHTML = `
-      <div class="log-controls">
-        <select id="log-service-sel" class="log-select">
+      <div class="log-controls" style="flex-wrap:wrap;gap:8px">
+        <select id="log-service-sel" class="log-select" style="flex:1;min-width:180px">
           <option value="">Select a service...</option>
           ${serviceOptions}
         </select>
-        <select id="log-lines-sel" class="log-select" style="max-width:90px">
+        <select id="log-lines-sel" class="log-select" style="max-width:100px">
           <option value="50">50 lines</option>
           <option value="100" selected>100 lines</option>
           <option value="200">200 lines</option>
           <option value="500">500 lines</option>
+          <option value="1000">1000 lines</option>
         </select>
-        <button class="btn-sm primary" onclick="fetchLogs('${data.id}')">Load Logs</button>
       </div>
-      <div id="log-output" class="log-viewer" style="min-height:200px">
-        <span style="color:var(--text3)">Select a service and click Load Logs</span>
+      <div class="log-controls" style="gap:8px;margin-top:6px">
+        <button class="btn-sm primary" onclick="fetchLogs('${data.id}')">▶ Load Logs</button>
+        <button class="btn-sm" id="btn-download-log" onclick="downloadLogs('${data.id}')" disabled
+          style="opacity:0.5;cursor:not-allowed">⬇ Download</button>
+        <button class="btn-sm" onclick="clearLogOutput()" style="margin-left:auto">✕ Clear</button>
+      </div>
+      ${!pm2.length ? `<div style="color:var(--orange);font-family:monospace;font-size:0.75rem;padding:8px 0">
+        ⚠ No PM2 services found on this server. Try refreshing.
+      </div>` : ''}
+      <div id="log-output" class="log-viewer" style="min-height:300px;margin-top:10px">
+        <span style="color:var(--text3)">Select a service and click ▶ Load Logs</span>
       </div>
     `;
     if (body.dataset.preselect) {
-      const [name, user] = body.dataset.preselect.split('|');
       document.getElementById('log-service-sel').value = body.dataset.preselect;
       delete body.dataset.preselect;
       fetchLogs(data.id);
@@ -1178,10 +1183,14 @@ function openLogsForService(sid, name, user) {
 async function fetchLogs(sid) {
   const sel = document.getElementById('log-service-sel');
   const lines = document.getElementById('log-lines-sel')?.value || 100;
-  if (!sel?.value) return;
+  if (!sel?.value) { toast('Select a service first', 'error'); return; }
   const [service, user] = sel.value.split('|');
   const output = document.getElementById('log-output');
-  output.textContent = 'Loading logs...';
+  const dlBtn = document.getElementById('btn-download-log');
+
+  output.innerHTML = '<span style="color:var(--accent)">⟳ Loading logs...</span>';
+  if (dlBtn) { dlBtn.disabled = true; dlBtn.style.opacity = '0.5'; dlBtn.style.cursor = 'not-allowed'; }
+
   try {
     const res = await fetch('/api/pm2/logs', {
       method: 'POST',
@@ -1189,12 +1198,64 @@ async function fetchLogs(sid) {
       body: JSON.stringify({ server_id: sid, service, run_as: user, lines })
     });
     const data = await res.json();
-    if (data.error) output.textContent = 'Error: ' + data.error;
-    else output.textContent = data.logs || '(no output)';
-    output.scrollTop = output.scrollHeight;
+    if (data.error) {
+      output.textContent = '❌ Error: ' + data.error;
+    } else {
+      const logText = data.logs || '(no output)';
+      output.textContent = logText;
+      output.scrollTop = output.scrollHeight;
+      // Enable download button now that we have logs
+      if (dlBtn) {
+        dlBtn.disabled = false;
+        dlBtn.style.opacity = '1';
+        dlBtn.style.cursor = 'pointer';
+        dlBtn.dataset.sid = sid;
+        dlBtn.dataset.service = service;
+        dlBtn.dataset.user = user;
+      }
+      toast(`Loaded ${logText.split('\n').length} lines`, 'success');
+    }
   } catch(e) {
-    output.textContent = 'Failed: ' + e.message;
+    output.textContent = '❌ Failed: ' + e.message;
   }
+}
+
+async function downloadLogs(sid) {
+  const dlBtn = document.getElementById('btn-download-log');
+  const sel = document.getElementById('log-service-sel');
+  const lines = document.getElementById('log-lines-sel')?.value || 1000;
+  if (!sel?.value) { toast('Select a service first', 'error'); return; }
+  const [service, user] = sel.value.split('|');
+
+  toast('Preparing download...', 'info');
+  try {
+    const res = await fetch('/api/pm2/logs/download', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ server_id: sid, service, run_as: user, lines })
+    });
+    if (!res.ok) { toast('Download failed', 'error'); return; }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const fnMatch = disposition.match(/filename="(.+?)"/);
+    const filename = fnMatch ? fnMatch[1] : `${service}_logs.txt`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${filename}`, 'success');
+  } catch(e) {
+    toast('Download error: ' + e.message, 'error');
+  }
+}
+
+function clearLogOutput() {
+  const output = document.getElementById('log-output');
+  const dlBtn = document.getElementById('btn-download-log');
+  if (output) output.innerHTML = '<span style="color:var(--text3)">Select a service and click ▶ Load Logs</span>';
+  if (dlBtn) { dlBtn.disabled = true; dlBtn.style.opacity = '0.5'; dlBtn.style.cursor = 'not-allowed'; }
 }
 
 // ─── Server Management ────────────────────────────────────────────────────
@@ -1202,7 +1263,7 @@ function openAddServerModal() { document.getElementById('add-server-modal').clas
 function closeAddServerModal() {
   document.getElementById('add-server-modal').classList.remove('open');
   document.getElementById('conn-test-status').innerHTML = '';
-  ['f-name','f-ip','f-user','f-key','f-pass','f-sudo'].forEach(id => { document.getElementById(id).value = ''; });
+  ['f-name','f-ip','f-user','f-key','f-pass'].forEach(id => { document.getElementById(id).value = ''; });
   document.getElementById('f-port').value = '22';
   document.getElementById('f-tags').value = '';
 }
@@ -1243,7 +1304,6 @@ async function addServer() {
         port: document.getElementById('f-port').value || 22,
         key_path: document.getElementById('f-key').value,
         password: document.getElementById('f-pass').value,
-        sudo_password: document.getElementById('f-sudo').value,
       })
     });
     const data = await res.json();

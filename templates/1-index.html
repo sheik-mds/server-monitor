@@ -766,11 +766,6 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
         <label class="form-label">Password (fallback)</label>
         <input type="password" id="f-pass" class="form-input" placeholder="Only if no SSH key">
       </div>
-      <div class="form-group">
-        <label class="form-label">Sudo Password <span style="color:var(--text3);font-weight:400;text-transform:none;letter-spacing:0">(for root PM2 access)</span></label>
-        <input type="password" id="f-sudo" class="form-input" placeholder="Required if sudo asks for password">
-        <div class="form-hint">Used only for <code>sudo pm2</code> commands. Stored encrypted locally. Never sent to browser after save.</div>
-      </div>
       <div id="conn-test-status"></div>
     </div>
     <div class="modal-footer">
@@ -1202,7 +1197,7 @@ function openAddServerModal() { document.getElementById('add-server-modal').clas
 function closeAddServerModal() {
   document.getElementById('add-server-modal').classList.remove('open');
   document.getElementById('conn-test-status').innerHTML = '';
-  ['f-name','f-ip','f-user','f-key','f-pass','f-sudo'].forEach(id => { document.getElementById(id).value = ''; });
+  ['f-name','f-ip','f-user','f-key','f-pass'].forEach(id => { document.getElementById(id).value = ''; });
   document.getElementById('f-port').value = '22';
   document.getElementById('f-tags').value = '';
 }
@@ -1243,7 +1238,6 @@ async function addServer() {
         port: document.getElementById('f-port').value || 22,
         key_path: document.getElementById('f-key').value,
         password: document.getElementById('f-pass').value,
-        sudo_password: document.getElementById('f-sudo').value,
       })
     });
     const data = await res.json();
