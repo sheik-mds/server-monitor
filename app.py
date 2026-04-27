@@ -144,68 +144,78 @@ print(json.dumps({
 "
 """
 
-PM2_SCRIPT = r"""
-bash -c '
-collect_pm2() {
-    local user="$1"
-    local sudo_prefix="$2"
-    
-    if ! ${sudo_prefix}pm2 list --no-color 2>/dev/null | grep -q "name"; then
-        return
-    fi
-    
-    ${sudo_prefix}pm2 jlist 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for p in data:
-        print(json.dumps({
-            \"name\": p.get(\"name\",\"\"),
-            \"pm_id\": p.get(\"pm_id\",0),
-            \"status\": p.get(\"pm2_env\",{}).get(\"status\",\"?\"),
-            \"cpu\": p.get(\"monit\",{}).get(\"cpu\",0),
-            \"memory\": p.get(\"monit\",{}).get(\"memory\",0),
-            \"uptime\": p.get(\"pm2_env\",{}).get(\"pm_uptime\",0),
-            \"restarts\": p.get(\"pm2_env\",{}).get(\"restart_time\",0),
-            \"pid\": p.get(\"pid\",0),
-            \"user\": \"'"$user"'\",
-            \"is_root\": \"'"$user"'\" == \"root\",
-            \"exec_mode\": p.get(\"pm2_env\",{}).get(\"exec_mode\",\"fork\"),
-            \"script\": p.get(\"pm2_env\",{}).get(\"pm_exec_path\",\"\"),
-        }))
-except:
-    pass
-" 2>/dev/null
-}
 
-# Root PM2
-collect_pm2 "root" "sudo "
+# PM2_SCRIPT kept for reference but replaced by build_pm2_script() below
+PM2_SCRIPT = ""
 
-# Current user PM2
-CURRENT_USER=$(whoami)
-if [ "$CURRENT_USER" != "root" ]; then
-    collect_pm2 "$CURRENT_USER" ""
-fi
+# Python snippet used inside the shell script to parse pm2 jlist JSON
+_PM2_PARSE_PY = (
+    "import sys,json;"
+    "data=json.load(sys.stdin);"
+    "[ print(json.dumps({"
+    "'name':p.get('name',''),"
+    "'pm_id':p.get('pm_id',0),"
+    "'status':p.get('pm2_env',{}).get('status','?'),"
+    "'cpu':p.get('monit',{}).get('cpu',0),"
+    "'memory':p.get('monit',{}).get('memory',0),"
+    "'uptime':p.get('pm2_env',{}).get('pm_uptime',0),"
+    "'restarts':p.get('pm2_env',{}).get('restart_time',0),"
+    "'pid':p.get('pid',0),"
+    "'user':'root',"
+    "'is_root':True,"
+    "'exec_mode':p.get('pm2_env',{}).get('exec_mode','fork'),"
+    "'script':p.get('pm2_env',{}).get('pm_exec_path','')"
+    "})) for p in data ]"
+)
 
-# Check other users who might have PM2
-for home_dir in /home/*/; do
-    username=$(basename "$home_dir")
-    if [ "$username" != "$CURRENT_USER" ] && [ "$username" != "root" ]; then
-        if [ -f "$home_dir/.nvm/versions/node/$(ls $home_dir/.nvm/versions/node/ 2>/dev/null | head -1)/bin/pm2" ] || command -v pm2 >/dev/null 2>&1; then
-            sudo -u "$username" pm2 jlist 2>/dev/null | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for p in data:
-        print(json.dumps({\"name\": p.get(\"name\",\"\"), \"pm_id\": p.get(\"pm_id\",0), \"status\": p.get(\"pm2_env\",{}).get(\"status\",\"?\"), \"cpu\": p.get(\"monit\",{}).get(\"cpu\",0), \"memory\": p.get(\"monit\",{}).get(\"memory\",0), \"uptime\": p.get(\"pm2_env\",{}).get(\"pm_uptime\",0), \"restarts\": p.get(\"pm2_env\",{}).get(\"restart_time\",0), \"pid\": p.get(\"pid\",0), \"user\": \"$username\", \"is_root\": False, \"exec_mode\": p.get(\"pm2_env\",{}).get(\"exec_mode\",\"fork\"), \"script\": p.get(\"pm2_env\",{}).get(\"pm_exec_path\",\"\")}))
-except:
-    pass
-" 2>/dev/null
-        fi
-    fi
-done
-'
-"""
+_PM2_PARSE_PY_USER = (
+    "import sys,json;"
+    "data=json.load(sys.stdin);"
+    "[ print(json.dumps({"
+    "'name':p.get('name',''),"
+    "'pm_id':p.get('pm_id',0),"
+    "'status':p.get('pm2_env',{}).get('status','?'),"
+    "'cpu':p.get('monit',{}).get('cpu',0),"
+    "'memory':p.get('monit',{}).get('memory',0),"
+    "'uptime':p.get('pm2_env',{}).get('pm_uptime',0),"
+    "'restarts':p.get('pm2_env',{}).get('restart_time',0),"
+    "'pid':p.get('pid',0),"
+    "'user':p.get('pm2_env',{}).get('username','user'),"
+    "'is_root':False,"
+    "'exec_mode':p.get('pm2_env',{}).get('exec_mode','fork'),"
+    "'script':p.get('pm2_env',{}).get('pm_exec_path','')"
+    "})) for p in data ]"
+)
+
+
+def build_pm2_script(sudo_password: str = '') -> str:
+    """
+    Build a shell command that collects PM2 process info as JSON lines.
+    Uses sudo with password piped via stdin when sudo_password is provided.
+    Uses full path /usr/local/bin/pm2 to avoid PATH issues with sudo.
+    """
+    parse_root = _PM2_PARSE_PY.replace("'", "'\\''")   # shell-safe single-quote escape
+    parse_user = _PM2_PARSE_PY_USER.replace("'", "'\\''")
+
+    if sudo_password:
+        # Pipe password to sudo -S; -p '' suppresses the password prompt
+        sudo_cmd = f"echo '{sudo_password}' | sudo -S -p '' "
+    else:
+        sudo_cmd = "sudo "
+
+    return (
+        f"("
+        # ── Root PM2 via sudo ──────────────────────────────────────────
+        f"{sudo_cmd}/usr/local/bin/pm2 jlist 2>/dev/null "
+        f"| python3 -c '{parse_root}' 2>/dev/null; "
+        # ── Current user PM2 (no sudo) ────────────────────────────────
+        f"CUSER=$(whoami); "
+        f"if [ \"$CUSER\" != 'root' ]; then "
+        f"  /usr/local/bin/pm2 jlist 2>/dev/null "
+        f"  | python3 -c '{parse_user}' 2>/dev/null; "
+        f"fi"
+        f") 2>/dev/null"
+    )
 
 def collect_server_metrics(server: dict) -> dict:
     sid = server['id']
@@ -229,7 +239,9 @@ def collect_server_metrics(server: dict) -> dict:
             result['metrics'] = json.loads(json_match.group())
             result['status'] = 'online'
         # PM2 processes
-        pm2_raw = ssh_exec(client, PM2_SCRIPT.strip(), timeout=20)
+        sudo_password = server.get('sudo_password', '').strip()
+        pm2_script = build_pm2_script(sudo_password)
+        pm2_raw = ssh_exec(client, pm2_script, timeout=20)
         pm2_list = []
         for line in pm2_raw.strip().split('\n'):
             line = line.strip()
